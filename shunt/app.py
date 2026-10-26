@@ -12,6 +12,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
+from PIL import Image
 
 from . import __version__, elevate
 from .core import backup as backup_core
@@ -19,6 +20,12 @@ from .core import catalog, profiles
 from .core import restore as restore_core
 from .ui import theme
 from .ui.tree import CheckTree
+
+
+def _res(name: str) -> Path:
+    """Asset path that works both from source and inside PyInstaller."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return base / "assets" / name
 
 
 class ShuntApp(ctk.CTk):
@@ -30,6 +37,10 @@ class ShuntApp(ctk.CTk):
         self.minsize(950, 650)
         self.configure(fg_color=theme.BG)
         self.admin = elevate.is_admin()
+        try:
+            self.iconbitmap(str(_res("shunt.ico")))
+        except Exception:
+            pass
 
         self._build_header()
 
@@ -54,8 +65,15 @@ class ShuntApp(ctk.CTk):
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color=theme.BG, height=34)
         bar.pack(fill="x", padx=10, pady=(8, 0))
-        ctk.CTkLabel(bar, text="▓▒░ S H U N T", font=theme.FONT_TITLE,
-                     text_color=theme.GREEN).pack(side="left")
+        try:
+            self._logo = ctk.CTkImage(
+                Image.open(_res("shunt.png")), size=(42, 42))
+            ctk.CTkLabel(bar, text="S H U N T", image=self._logo,
+                         compound="left", font=theme.FONT_TITLE,
+                         text_color=theme.GREEN).pack(side="left")
+        except Exception:
+            ctk.CTkLabel(bar, text="S H U N T", font=theme.FONT_TITLE,
+                         text_color=theme.GREEN).pack(side="left")
         state = ("ADMIN — backup-mode /B active" if self.admin
                  else "NOT ELEVATED — ACL bypass off")
         ctk.CTkLabel(bar, text=state, font=theme.FONT_MONO,

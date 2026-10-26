@@ -12,6 +12,8 @@ subprocess.run([
     "--onefile", "--windowed",
     "--uac-admin",
     "--name", "Shunt",
+    "--icon", "assets/shunt.ico",
+    "--add-data", "assets;assets",
     "--collect-all", "customtkinter",
     "shunt_app.py",
 ], check=True)
