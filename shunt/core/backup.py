@@ -25,18 +25,38 @@ def _emit(on_event: Event_ | None, evt: tuple) -> None:
         on_event(evt)
 
 
+_FILE_ATTRIBUTE_OFFLINE = 0x1000
+
+
 def _zip_dir(src_dir: Path, zip_path: Path,
-             on_event: Event_ | None, cancel: Event | None) -> None:
+             on_event: Event_ | None, cancel: Event | None) -> list[str]:
+    """Compress staging dir into a zip. Returns per-file error strings.
+
+    Staged files can still be unhydrated OneDrive placeholders (robocopy
+    /B copies the reparse stub across) — opening them raises
+    ERROR_CANT_ACCESS_FILE. Skip anything still carrying the offline
+    attribute, and never let one bad file kill the whole zip.
+    """
     files = [p for p in src_dir.rglob("*") if p.is_file()]
     total = len(files)
+    errors: list[str] = []
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED,
                          compresslevel=6) as zf:
         for i, p in enumerate(files, 1):
             if cancel is not None and cancel.is_set():
                 raise InterruptedError("cancelled")
-            zf.write(p, p.relative_to(src_dir).as_posix())
+            rel = p.relative_to(src_dir).as_posix()
+            try:
+                if p.stat().st_file_attributes & _FILE_ATTRIBUTE_OFFLINE:
+                    errors.append(f"{rel}: cloud placeholder (skipped)")
+                    continue
+                zf.write(p, rel)
+            except OSError as e:
+                errors.append(f"{rel}: {e}")
+                _emit(on_event, ("log", f"!! zip skip {p.name}: {e}"))
             if i % 200 == 0 or i == total:
                 _emit(on_event, ("zip_progress", i, total))
+    return errors
 
 
 def run_backup(*, profile_root: Path, items: list[CatalogItem],
@@ -77,20 +97,25 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
             profile_root.name, str(profile_root),
             [it.rel_path for it in items]))
 
+        zip_errors: list[str] = []
         if mode == "zip":
             _emit(on_event, ("phase", "compressing to zip..."))
-            _zip_dir(staging, dest, on_event, cancel)
+            zip_errors = _zip_dir(staging, dest, on_event, cancel)
+            for e in zip_errors:
+                _emit(on_event, ("log", f"   ! {e}"))
     finally:
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
 
-    report = _write_report(dest, mode, profile_root, results, admin)
+    report = _write_report(dest, mode, profile_root, results, admin,
+                           zip_errors)
     _emit(on_event, ("done", report))
     return report, results
 
 
 def _write_report(dest: Path, mode: str, profile_root: Path,
-                  results: list[ItemResult], admin: bool) -> Path:
+                  results: list[ItemResult], admin: bool,
+                  zip_errors: list[str] | None = None) -> Path:
     lines = [
         "SHUNT backup report",
         f"date          : {datetime.now():%Y-%m-%d %H:%M:%S}",
@@ -109,6 +134,11 @@ def _write_report(dest: Path, mode: str, profile_root: Path,
                      f"{r.files_failed:>7}  {status}")
         total_fail += r.files_failed
         for e in r.errors[:50]:
+            lines.append(f"    ! {e}")
+    if zip_errors:
+        lines.append("")
+        lines.append("zip stage skips/errors:")
+        for e in zip_errors[:200]:
             lines.append(f"    ! {e}")
     lines += ["-" * 82,
               f"failed files total: {total_fail}",
