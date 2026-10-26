@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
@@ -85,6 +86,7 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
         res.exit_code = 16
         return res
 
+    last_file_emit = 0.0
     try:
         for raw in proc.stdout:
             line = raw.rstrip("\r\n")
@@ -109,10 +111,14 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
                         res.files_failed = int(nums[4])
                     elif s.group(1) == "Dirs":
                         res.dirs_copied = int(nums[1])
+            # throttled — status display only, no need for per-file fidelity
             if on_file and "\t" in line:
-                nm = _NAME_RE.search(line)
-                if nm:
-                    on_file(nm.group(1).strip())
+                now = time.monotonic()
+                if now - last_file_emit >= 0.1:
+                    nm = _NAME_RE.search(line)
+                    if nm:
+                        on_file(nm.group(1).strip())
+                        last_file_emit = now
             if on_line:
                 on_line(line)
     finally:

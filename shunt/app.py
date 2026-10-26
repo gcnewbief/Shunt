@@ -6,6 +6,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from .core import backup as backup_core
 from .core import catalog, profiles
 from .core import restore as restore_core
 from .ui import theme
+from .ui.tooltip import Tooltip
 from .ui.tree import CheckTree
 
 
@@ -26,6 +28,37 @@ def _res(name: str) -> Path:
     """Asset path that works both from source and inside PyInstaller."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
     return base / "assets" / name
+
+
+# ---- debug log (toggled from the header) -------------------------------
+_debug_fp = None
+
+
+def _set_debug(on: bool) -> Path | None:
+    global _debug_fp
+    if on and _debug_fp is None:
+        p = Path.home() / "Desktop" / "shunt_debug.log"
+        try:
+            _debug_fp = open(p, "a", encoding="utf-8", buffering=1)
+            _debug_fp.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+            return p
+        except OSError:
+            _debug_fp = None
+    elif not on and _debug_fp is not None:
+        try:
+            _debug_fp.close()
+        except Exception:
+            pass
+        _debug_fp = None
+    return None
+
+
+def _dbg(line: str) -> None:
+    if _debug_fp is not None:
+        try:
+            _debug_fp.write(line + "\n")
+        except Exception:
+            pass
 
 
 class ShuntApp(ctk.CTk):
@@ -79,6 +112,19 @@ class ShuntApp(ctk.CTk):
         ctk.CTkLabel(bar, text=state, font=theme.FONT_MONO,
                      text_color=theme.GREEN if self.admin else theme.AMBER
                      ).pack(side="right")
+        self.debug_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(bar, text="debug log", variable=self.debug_var,
+                        command=self._toggle_debug, font=theme.FONT_MONO,
+                        text_color=theme.TEXT_DIM, fg_color=theme.GREEN,
+                        hover_color=theme.GREEN_HOVER,
+                        checkbox_height=16, checkbox_width=16,
+                        corner_radius=2).pack(side="right", padx=10)
+
+    def _toggle_debug(self) -> None:
+        p = _set_debug(self.debug_var.get())
+        if p:
+            self.backup_tab.log(f":: debug log → {p}")
+            self.restore_tab.log(f":: debug log → {p}")
 
 
 class _JobPanel(ctk.CTkFrame):
@@ -92,6 +138,7 @@ class _JobPanel(ctk.CTkFrame):
         self.running = False
         self._item_i = self._item_n = 0
         self._item_label = ""
+        self._start_label = ""
 
     # ---- console ----
     def log(self, msg: str) -> None:
@@ -105,26 +152,40 @@ class _JobPanel(ctk.CTkFrame):
         self.console.see("end")
 
     def _drain(self) -> None:
+        # Bounded per cycle — under a robocopy flood the queue refills
+        # faster than it drains; an unbounded loop starves the mainloop
+        # and Windows marks the window "Not Responding".
+        deadline = time.perf_counter() + 0.025
         logs: list[str] = []
+        skipped = 0
         try:
-            while True:
+            while time.perf_counter() < deadline:
                 evt = self.q.get_nowait()
                 if evt[0] == "log":
-                    logs.append(evt[1])
-                    if len(logs) >= 400:
-                        self._log_lines(logs)
-                        logs.clear()
+                    _dbg(evt[1])
+                    if len(logs) < 600:
+                        logs.append(evt[1])
+                    else:
+                        skipped += 1
                 else:
-                    if logs:
-                        self._log_lines(logs)
+                    if logs or skipped:
+                        self._flush_logs(logs, skipped)
                         logs.clear()
+                        skipped = 0
                     self._on_event(evt)
         except queue.Empty:
             pass
-        if logs:
-            self._log_lines(logs)
+        if logs or skipped:
+            self._flush_logs(logs, skipped)
         if self.running:
-            self.after(60, self._drain)
+            self.after(20, self._drain)
+
+    def _flush_logs(self, lines: list[str], skipped: int) -> None:
+        if skipped:
+            lines.append(f"… {skipped} lines skipped "
+                         f"(full detail in report/debug log)")
+            _dbg(lines[-1])
+        self._log_lines(lines)
 
     def _on_event(self, evt: tuple) -> None:
         kind = evt[0]
@@ -168,7 +229,8 @@ class _JobPanel(ctk.CTkFrame):
         self.cancel.clear()
         self.running = True
         self.progress.set(0)
-        self.start_btn.configure(state="disabled")
+        self._item_label = ""
+        self.start_btn.configure(state="disabled", text="» RUNNING…")
         self.cancel_btn.configure(state="normal")
         threading.Thread(target=self._worker, args=(target, kwargs),
                          daemon=True).start()
@@ -186,7 +248,7 @@ class _JobPanel(ctk.CTkFrame):
     def _finish(self, report: Path | None) -> None:
         self.running = False
         self.progress.set(1)
-        self.start_btn.configure(state="normal")
+        self.start_btn.configure(state="normal", text=self._start_label)
         self.cancel_btn.configure(state="disabled")
         if report:
             self.status.configure(text="done")
@@ -321,12 +383,17 @@ class BackupPanel(_JobPanel):
 
         btns = ctk.CTkFrame(right, fg_color="transparent")
         btns.pack(side="bottom", fill="x", padx=10, pady=10)
+        self._start_label = "▶ START BACKUP"
         self.start_btn = ctk.CTkButton(
-            btns, text="▶ START BACKUP", font=theme.FONT_BOLD,
+            btns, text=self._start_label, font=theme.FONT_BOLD,
             fg_color=theme.GREEN_DARK, hover_color=theme.GREEN_HOVER,
             text_color="#eaffea", border_color=theme.GREEN, border_width=1,
             command=self._start_backup)
         self.start_btn.pack(side="left", expand=True, fill="x", padx=(0, 4))
+        Tooltip(self.start_btn,
+                "Copy every ticked folder/AppData item from the source\n"
+                "profile into the destination (robocopy /B — ACL-safe,\n"
+                "multi-threaded). Writes a manifest + report.")
         self.cancel_btn = ctk.CTkButton(
             btns, text="✕", width=40, fg_color="#3a1212",
             hover_color=theme.RED, text_color="#ffd7d7",
@@ -503,12 +570,17 @@ class RestorePanel(_JobPanel):
 
         btns = ctk.CTkFrame(right, fg_color="transparent")
         btns.pack(side="bottom", fill="x", padx=10, pady=10)
+        self._start_label = "▶ START RESTORE"
         self.start_btn = ctk.CTkButton(
-            btns, text="▶ START RESTORE", font=theme.FONT_BOLD,
+            btns, text=self._start_label, font=theme.FONT_BOLD,
             fg_color=theme.GREEN_DARK, hover_color=theme.GREEN_HOVER,
             text_color="#eaffea", border_color=theme.GREEN, border_width=1,
             command=self._start_restore)
         self.start_btn.pack(side="left", expand=True, fill="x", padx=(0, 4))
+        Tooltip(self.start_btn,
+                "Copy the ticked items from this backup into the target\n"
+                "profile. Paths are profile-relative, so a different\n"
+                "username is fine. Close browsers/Outlook first.")
         self.cancel_btn = ctk.CTkButton(
             btns, text="✕", width=40, fg_color="#3a1212",
             hover_color=theme.RED, text_color="#ffd7d7",
