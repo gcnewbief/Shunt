@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+.env
+*.staging/
+shunt_report*.txt
+ShuntBackup_*/
+ShuntBackup_*.zip
+tests/mock_drive/
