@@ -46,8 +46,10 @@ class ShuntApp(ctk.CTk):
 
         self.backup_tab = BackupPanel(self.tabs.tab("  BACKUP — pull from old drive  "),
                                       admin=self.admin)
+        self.backup_tab.pack(fill="both", expand=True)
         self.restore_tab = RestorePanel(self.tabs.tab("  RESTORE — import into profile  "),
                                         admin=self.admin)
+        self.restore_tab.pack(fill="both", expand=True)
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color=theme.BG, height=34)
@@ -70,22 +72,39 @@ class _JobPanel(ctk.CTkFrame):
         self.q: queue.Queue = queue.Queue()
         self.cancel = threading.Event()
         self.running = False
+        self._item_i = self._item_n = 0
+        self._item_label = ""
 
     # ---- console ----
     def log(self, msg: str) -> None:
-        self.console.insert("end", msg + "\n")
+        self._log_lines([msg])
+
+    def _log_lines(self, lines: list[str]) -> None:
+        self.console.insert("end", "\n".join(lines) + "\n")
         n = int(self.console.index("end-1c").split(".")[0])
         if n > 1500:
             self.console.delete("1.0", f"{n - 1200}.0")
         self.console.see("end")
 
     def _drain(self) -> None:
+        logs: list[str] = []
         try:
             while True:
                 evt = self.q.get_nowait()
-                self._on_event(evt)
+                if evt[0] == "log":
+                    logs.append(evt[1])
+                    if len(logs) >= 400:
+                        self._log_lines(logs)
+                        logs.clear()
+                else:
+                    if logs:
+                        self._log_lines(logs)
+                        logs.clear()
+                    self._on_event(evt)
         except queue.Empty:
             pass
+        if logs:
+            self._log_lines(logs)
         if self.running:
             self.after(60, self._drain)
 
@@ -96,11 +115,22 @@ class _JobPanel(ctk.CTkFrame):
         elif kind == "phase":
             self.log(f":: {evt[1]}")
             self.status.configure(text=evt[1])
+        elif kind == "file":
+            if self._item_label:
+                self.status.configure(
+                    text=f"[{self._item_i}/{self._item_n}] "
+                         f"{self._item_label} — {evt[1]}")
+            else:
+                self.status.configure(text=evt[1])
         elif kind == "item_start":
             _, i, n, label = evt
+            self._item_i, self._item_n, self._item_label = i, n, label
+            self.progress.set((i - 1) / n)
             self.status.configure(text=f"[{i}/{n}] {label}")
         elif kind == "item_done":
             _, label, res = evt
+            if self._item_n:
+                self.progress.set(self._item_i / self._item_n)
             if res.cancelled:
                 self.log(f"  ✕ {label} — cancelled")
             elif res.ok:
@@ -181,7 +211,8 @@ class BackupPanel(_JobPanel):
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=3)
+        self.grid_rowconfigure(2, weight=1)
 
         # --- source row ---
         src = ctk.CTkFrame(self, **theme.W["frame"])
@@ -388,7 +419,8 @@ class RestorePanel(_JobPanel):
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=3)
+        self.grid_rowconfigure(2, weight=1)
 
         src = ctk.CTkFrame(self, **theme.W["frame"])
         src.grid(row=0, column=0, sticky="ew", padx=4, pady=4)

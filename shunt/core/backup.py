@@ -64,6 +64,7 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
             res = run_item(src, dst, item.rel_path, admin=admin,
                            extra_xd=item.extra_xd, extra_xf=item.extra_xf,
                            on_line=lambda l: _emit(on_event, ("log", l)),
+                           on_file=lambda n: _emit(on_event, ("file", n)),
                            cancel=cancel)
             res.rel_path = item.rel_path
             results.append(res)

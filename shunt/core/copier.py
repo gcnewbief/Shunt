@@ -62,6 +62,7 @@ def build_args(src: Path, dst: Path, *, admin: bool,
 def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
              extra_xd: tuple = (), extra_xf: tuple = (),
              on_line: Callable[[str], None] | None = None,
+             on_file: Callable[[str], None] | None = None,
              cancel: Event | None = None) -> ItemResult:
     res = ItemResult(rel_path=rel_path)
 
@@ -108,6 +109,10 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
                         res.files_failed = int(nums[4])
                     elif s.group(1) == "Dirs":
                         res.dirs_copied = int(nums[1])
+            if on_file and "\t" in line:
+                nm = _NAME_RE.search(line)
+                if nm:
+                    on_file(nm.group(1).strip())
             if on_line:
                 on_line(line)
     finally:

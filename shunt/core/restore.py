@@ -72,6 +72,8 @@ def _restore_zip(source: Path, rel_items: list[str], dest_profile: Path,
                     shutil.copyfileobj(zsrc, out, 1024 * 512)
             except OSError as e:
                 errors.append(f"{m.filename}: {e}")
+            if i % 25 == 0 or i == total:
+                _emit(on_event, ("file", m.filename))
             if i % 100 == 0 or i == total:
                 _emit(on_event, ("zip_progress", i, total))
                 _emit(on_event, ("log", m.filename))
@@ -102,6 +104,7 @@ def run_restore(*, backup: Path, kind: str, rel_items: list[str],
             _emit(on_event, ("item_start", i, len(rel_items), rel))
             res = run_item(src, dest_profile / rel, rel, admin=admin,
                            on_line=lambda l: _emit(on_event, ("log", l)),
+                           on_file=lambda n: _emit(on_event, ("file", n)),
                            cancel=cancel)
             results.append(res)
             _emit(on_event, ("item_done", rel, res))
