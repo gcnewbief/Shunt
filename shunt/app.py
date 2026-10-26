@@ -224,6 +224,11 @@ class _JobPanel(ctk.CTkFrame):
             self.status.configure(text=f"compressing {i}/{total} files")
         elif kind == "done":
             self._finish(evt[1])
+        else:
+            self._on_panel_event(evt)
+
+    def _on_panel_event(self, evt: tuple) -> None:
+        """Hook for panel-specific event kinds (overridden by RestorePanel)."""
 
     def _start(self, target, kwargs: dict) -> None:
         self.cancel.clear()
@@ -606,11 +611,26 @@ class RestorePanel(_JobPanel):
         if not p.exists():
             self.info_lbl.configure(text="not found")
             return
+        # zips with many entries take seconds to list — keep UI alive
+        self._backup = None
+        self.info_lbl.configure(text="inspecting…")
+        self.running = True
+        threading.Thread(target=self._inspect_worker, args=(p,),
+                         daemon=True).start()
+        self.after(20, self._drain)
+
+    def _inspect_worker(self, p: Path) -> None:
         try:
-            info = restore_core.inspect_backup(p)
+            self.q.put(("inspect", p, restore_core.inspect_backup(p)))
         except Exception as e:
-            self.info_lbl.configure(text=f"error: {e}")
+            self.q.put(("inspect_err", str(e)))
+
+    def _on_panel_event(self, evt: tuple) -> None:
+        self.running = False
+        if evt[0] == "inspect_err":
+            self.info_lbl.configure(text=f"error: {evt[1]}")
             return
+        _, p, info = evt
         self._backup, self._kind = p, info["kind"]
         m = info["manifest"]
         if m:
