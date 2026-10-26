@@ -45,12 +45,14 @@ class ItemResult:
         return 0 <= self.exit_code < 8
 
 
-def build_args(src: Path, dst: Path, *, admin: bool,
+def build_args(src: Path, dst: Path, *, admin: bool, overwrite: bool = False,
                extra_xd: tuple = (), extra_xf: tuple = ()) -> list[str]:
     args = ["robocopy", str(src), str(dst), "/E", "/COPY:DAT", "/DCOPY:T",
             "/R:1", "/W:1", "/XJ", "/XA:O", "/MT:16", "/NP"]
     if admin:
         args.append("/B")
+    if overwrite:
+        args.append("/IS")   # include "same" files — force re-copy
     xf = sorted(set(GLOBAL_XF) | set(extra_xf))
     xd = sorted(set(GLOBAL_XD) | set(extra_xd))
     if xf:
@@ -61,6 +63,7 @@ def build_args(src: Path, dst: Path, *, admin: bool,
 
 
 def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
+             overwrite: bool = False,
              extra_xd: tuple = (), extra_xf: tuple = (),
              on_line: Callable[[str], None] | None = None,
              on_file: Callable[[str], None] | None = None,
@@ -71,7 +74,7 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
         res.exit_code = 0
         return res
 
-    args = build_args(src, dst, admin=admin,
+    args = build_args(src, dst, admin=admin, overwrite=overwrite,
                       extra_xd=extra_xd, extra_xf=extra_xf)
     if on_line:
         on_line("> " + " ".join(args))

@@ -560,6 +560,18 @@ class RestorePanel(_JobPanel):
                      **theme.W["entry"]).pack(fill="x", padx=10, pady=4)
         ctk.CTkButton(right, text="browse…", command=self._browse_dest,
                       **theme.W["button"]).pack(padx=10, anchor="w")
+
+        self.overwrite_var = tk.BooleanVar(value=False)
+        ow = ctk.CTkCheckBox(
+            right, text="force overwrite", variable=self.overwrite_var,
+            font=theme.FONT, text_color=theme.TEXT, fg_color=theme.GREEN,
+            hover_color=theme.GREEN_HOVER, checkbox_height=18,
+            checkbox_width=18, corner_radius=3)
+        ow.pack(anchor="w", padx=10, pady=(10, 0))
+        Tooltip(ow, "re-copy files even when an identical copy already\n"
+                    "exists at the destination (adds robocopy /IS).\n"
+                    "slower, but guarantees a full rewrite.")
+
         ctk.CTkLabel(
             right, font=theme.FONT_MONO, text_color=theme.TEXT_DIM,
             justify="left", anchor="w",
@@ -663,6 +675,7 @@ class RestorePanel(_JobPanel):
                     dict(backup=self._backup, kind=self._kind,
                          rel_items=[str(i) for i in items],
                          dest_profile=dest, admin=self.admin,
+                         overwrite=self.overwrite_var.get(),
                          on_event=self.q.put, cancel=self.cancel))
 
 

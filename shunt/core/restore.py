@@ -52,8 +52,10 @@ def _safe_member(name: str) -> bool:
 
 
 def _restore_zip(source: Path, rel_items: list[str], dest_profile: Path,
-                 on_event: Event_ | None, cancel: Event | None) -> list[str]:
+                 on_event: Event_ | None, cancel: Event | None,
+                 overwrite: bool) -> list[str]:
     errors: list[str] = []
+    skipped = 0
     prefixes = tuple(i.rstrip("/") + "/" for i in rel_items)
     with zipfile.ZipFile(source) as zf:
         members = [m for m in zf.infolist()
@@ -67,6 +69,10 @@ def _restore_zip(source: Path, rel_items: list[str], dest_profile: Path,
                 continue
             target = dest_profile / m.filename
             try:
+                if not overwrite and target.exists() \
+                        and target.stat().st_size == m.file_size:
+                    skipped += 1
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(m) as zsrc, open(target, "wb") as out:
                     shutil.copyfileobj(zsrc, out, 1024 * 512)
@@ -77,11 +83,13 @@ def _restore_zip(source: Path, rel_items: list[str], dest_profile: Path,
             if i % 100 == 0 or i == total:
                 _emit(on_event, ("zip_progress", i, total))
                 _emit(on_event, ("log", m.filename))
+    if skipped:
+        _emit(on_event, ("log", f"skipped {skipped} identical existing files"))
     return errors
 
 
 def run_restore(*, backup: Path, kind: str, rel_items: list[str],
-                dest_profile: Path, admin: bool,
+                dest_profile: Path, admin: bool, overwrite: bool = False,
                 on_event: Event_ | None = None,
                 cancel: Event | None = None) -> tuple[Path, list[ItemResult]]:
     results: list[ItemResult] = []
@@ -91,7 +99,7 @@ def run_restore(*, backup: Path, kind: str, rel_items: list[str],
     if kind == "zip":
         _emit(on_event, ("phase", "extracting zip into profile"))
         zip_errors = _restore_zip(backup, rel_items, dest_profile,
-                                  on_event, cancel)
+                                  on_event, cancel, overwrite)
         for rel in rel_items:
             results.append(ItemResult(rel_path=rel, exit_code=0))
     else:
@@ -103,6 +111,7 @@ def run_restore(*, backup: Path, kind: str, rel_items: list[str],
                 continue
             _emit(on_event, ("item_start", i, len(rel_items), rel))
             res = run_item(src, dest_profile / rel, rel, admin=admin,
+                           overwrite=overwrite,
                            on_line=lambda l: _emit(on_event, ("log", l)),
                            on_file=lambda n: _emit(on_event, ("file", n)),
                            cancel=cancel)
