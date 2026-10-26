@@ -449,8 +449,11 @@ class BackupPanel(_JobPanel):
 
     def _add_item(self, parent: str, iid: str, item) -> None:
         label = item.label + (f"  · {item.note}" if item.note else "")
-        self.tree.add(parent, iid, label, checked=item.checked, payload=item,
-                      open_=True)
+        # containers (e.g. "AppData (programs)") carry no payload — they
+        # group children but are never copied themselves
+        payload = item if item.rel_path else None
+        self.tree.add(parent, iid, label, checked=item.checked,
+                      payload=payload, open_=True)
         for j, child in enumerate(item.children):
             self._add_item(iid, f"{iid}.{j}", child)
 

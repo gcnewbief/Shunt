@@ -44,6 +44,7 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
                on_event: Event_ | None = None,
                cancel: Event | None = None) -> tuple[Path, list[ItemResult]]:
     """Run the backup. Returns (report_path, per-item results)."""
+    items = [i for i in items if i.rel_path]
     results: list[ItemResult] = []
 
     staging: Path | None = None
