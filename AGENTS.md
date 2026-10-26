@@ -1,5 +1,8 @@
 # Shunt — agent notes
 
+Repo: https://github.com/gcnewbief/Shunt (branch: master, remote: origin).
+`gh` is keyring-authenticated and configured as git's credential helper.
+
 Windows data-migration tool for a repair-shop workflow. Pulls user
 profiles off old drives (or a live machine) into a folder/zip backup,
 restores them into a new profile. Python + CustomTkinter GUI over a
