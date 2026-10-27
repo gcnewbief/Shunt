@@ -76,8 +76,10 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
   `⟳`/`✓` may not render; `»`, `·`, `✕` are safe.
 - **Zip mode stages through robocopy first** so `/B` still applies —
   don't "optimize" that into pure-Python reads or ACL-denied drives
-  will fail. Leftover `.ShuntBackup_*.staging` dirs = interrupted zip
-  backups, safe to delete.
+  will fail. Leftover `shunt_staging_*` dirs = interrupted zip backups,
+  safe to delete — if a stale one resists deletion (deep paths inside),
+  use `rd /s /q "\\?\X:\path\dir"`. `_nuke_dir` handles it in code.
+  Never prefix staging names with a dot — Explorer/cmd choke on them.
 - **Zip staging skips offline-attribute files.** `/B` can carry OneDrive
   reparse stubs into staging where `zipfile` then dies with
   ERROR_CANT_ACCESS_FILE. `_zip_dir` skips them by attribute and catches

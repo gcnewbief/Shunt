@@ -4,7 +4,7 @@ build/
 dist/
 *.spec
 .env
-*.staging/
+shunt_staging_*/
 shunt_report*.txt
 ShuntBackup_*/
 ShuntBackup_*.zip

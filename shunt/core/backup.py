@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import shutil
 import struct
+import subprocess
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from threading import Event
 from typing import Callable
 
 from .catalog import CatalogItem
-from .copier import ItemResult, run_item
+from .copier import CREATE_NO_WINDOW, ItemResult, run_item
 from .disk import reset_drive
 from .manifest import REPORT_NAME, build_manifest, write_manifest
 
@@ -34,6 +35,43 @@ STALL_AFTER = 180       # seconds of zero I/O before a copy is "frozen"
 def _emit(on_event: Event_ | None, evt: tuple) -> None:
     if on_event:
         on_event(evt)
+
+
+def _extended(p: Path) -> str:
+    """Canonical \\\\?\\ extended path — resolve() expands 8.3 short
+    names (which \\\\?\\ paths reject) and adds the prefix itself."""
+    r = str(p.resolve())
+    return r if r.startswith("\\\\?\\") else "\\\\?\\" + r
+
+
+def _nuke_dir(path: Path, on_event: Event_ | None = None) -> None:
+    """Delete a dir tree that may contain >260-char paths or odd names.
+
+    Staged browser profiles get deep enough to defeat Explorer/rmdir —
+    the \\\\?\\ prefix lifts the MAX_PATH limit, and if anything still
+    resists, robocopy mirrors an empty dir over it (robocopy handles
+    long paths natively).
+    """
+    raw = _extended(path)
+    try:
+        shutil.rmtree(raw)
+    except OSError:
+        pass
+    if not path.exists():
+        return
+    empty = path.with_name(path.name + ".empty")
+    try:
+        empty.mkdir(exist_ok=True)
+        subprocess.run(["robocopy", str(empty), str(path), "/MIR",
+                        "/NFL", "/NDL", "/NJH", "/NJS", "/NP"],
+                       capture_output=True, creationflags=CREATE_NO_WINDOW)
+        shutil.rmtree(empty, ignore_errors=True)
+        shutil.rmtree(raw, ignore_errors=True)
+    except OSError:
+        pass
+    if path.exists():
+        _emit(on_event, ("log", f'!! couldn\'t remove {path} — manual '
+                                f'delete: rd /s /q "{raw}"'))
 
 
 _FILE_ATTRIBUTE_OFFLINE = 0x1000
@@ -112,7 +150,8 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
 
     staging: Path | None = None
     if mode == "zip":
-        staging = dest.parent / f".{dest.stem}.staging"
+        # no leading dot — Explorer/cmd handle dotted names poorly
+        staging = dest.parent / f"shunt_staging_{dest.stem}"
         _emit(on_event, ("phase", f"staging into {staging} (keeps ACL bypass)"))
         work = staging
     else:
@@ -176,7 +215,7 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
                 _emit(on_event, ("log", f"   ! {e}"))
     finally:
         if staging is not None:
-            shutil.rmtree(staging, ignore_errors=True)
+            _nuke_dir(staging, on_event)
 
     report = _write_report(dest, mode, profile_root, results, admin,
                            zip_errors)
