@@ -84,13 +84,18 @@ def main() -> int:
     items = catalog.build(PROFILE)
     labels = {i.label for i in items}
     check("Documents" in labels, "Documents present", failures)
-    appdata = next(i for i in items if i.children)
-    appdata_labels = {c.label for c in appdata.children}
-    check("Google Chrome" in appdata_labels, "Chrome item present", failures)
-    check(any("Vivaldi" in l for l in appdata_labels),
+    groups = [i for i in items if i.children]
+    spec_grp = next(g for g in groups if g.label.startswith("AppData"))
+    disc_grp = next(g for g in groups if g.label.startswith("Discovered"))
+    spec_labels = {c.label for c in spec_grp.children}
+    disc_labels = {c.label for c in disc_grp.children}
+    check("Google Chrome" in spec_labels, "Chrome item present", failures)
+    check(any("Vivaldi" in l for l in disc_labels),
           "Vivaldi auto-discovered (Chromium)", failures)
-    check(any("zen" in l for l in appdata_labels),
+    check(any("zen" in l for l in disc_labels),
           "zen auto-discovered (Gecko)", failures)
+    check(not any("Vivaldi" in l for l in spec_labels),
+          "discovery not mixed into curated group", failures)
 
     leaves = [i for i in items if i.rel_path] + \
         [c for i in items for c in i.children if c.rel_path]

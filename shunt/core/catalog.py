@@ -97,7 +97,7 @@ def _discover_browsers(profile_root: Path, known: set[str]) -> list[CatalogItem]
                     if rel not in known:
                         found.append(CatalogItem(
                             label=f"{prod.name} (Chromium)",
-                            rel_path=rel, note="auto-discovered",
+                            rel_path=rel, note="auto-discovered — review",
                             extra_xd=BROWSER_CACHE_XD))
                         known.add(rel)
                 elif (prod / "profiles.ini").is_file():
@@ -105,7 +105,8 @@ def _discover_browsers(profile_root: Path, known: set[str]) -> list[CatalogItem]
                     if rel not in known:
                         found.append(CatalogItem(
                             label=f"{prod.name} (Gecko)",
-                            rel_path=rel, note="auto-discovered"))
+                            rel_path=rel,
+                            note="auto-discovered — review"))
                         known.add(rel)
     return found
 
@@ -140,9 +141,15 @@ def build(profile_root: Path) -> list[CatalogItem]:
             appdata.append(CatalogItem(label=label, rel_path=rel,
                                        checked=checked, note=note,
                                        extra_xd=extra_xd))
-    appdata.extend(_discover_browsers(
-        profile_root, {c.rel_path for c in appdata}))
     if appdata:
         items.append(CatalogItem(label="AppData (programs)", children=appdata))
+
+    # auto-discovered browsers live in their own group — ticked but
+    # clearly marked for review, keeping the curated section tidy
+    discovered = _discover_browsers(
+        profile_root, {c.rel_path for c in appdata})
+    if discovered:
+        items.append(CatalogItem(
+            label="Discovered browsers (auto)", children=discovered))
 
     return items
