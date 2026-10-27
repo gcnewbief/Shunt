@@ -15,9 +15,19 @@ from typing import Callable
 
 from .catalog import CatalogItem
 from .copier import ItemResult, run_item
+from .disk import reset_drive
 from .manifest import REPORT_NAME, build_manifest, write_manifest
 
 Event_ = Callable[[tuple], None]
+
+# robocopy flag presets — see copier.build_args
+SPEED_PRESETS = {
+    "full":     dict(mt=16, ipg=0,  zb=False),
+    "gentle":   dict(mt=1,  ipg=10, zb=False),
+    "recovery": dict(mt=1,  ipg=50, zb=True),   # /ZB resumes mid-file
+}
+MAX_RESETS = 5          # drive resets attempted per item
+STALL_AFTER = 180       # seconds of zero I/O before a copy is "frozen"
 
 
 def _emit(on_event: Event_ | None, evt: tuple) -> None:
@@ -61,11 +71,14 @@ def _zip_dir(src_dir: Path, zip_path: Path,
 
 def run_backup(*, profile_root: Path, items: list[CatalogItem],
                dest: Path, mode: str, admin: bool,
+               speed: str = "full", auto_reset: bool = False,
                on_event: Event_ | None = None,
                cancel: Event | None = None) -> tuple[Path, list[ItemResult]]:
     """Run the backup. Returns (report_path, per-item results)."""
     items = [i for i in items if i.rel_path]
     results: list[ItemResult] = []
+    preset = SPEED_PRESETS.get(speed, SPEED_PRESETS["full"])
+    letter = profile_root.drive[:1] if profile_root.drive else ""
 
     staging: Path | None = None
     if mode == "zip":
@@ -82,11 +95,39 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
                 break
             src, dst = profile_root / item.rel_path, work / item.rel_path
             _emit(on_event, ("item_start", i, len(items), item.label))
-            res = run_item(src, dst, item.rel_path, admin=admin,
-                           extra_xd=item.extra_xd, extra_xf=item.extra_xf,
-                           on_line=lambda l: _emit(on_event, ("log", l)),
-                           on_file=lambda n: _emit(on_event, ("file", n)),
-                           cancel=cancel)
+            resets = 0
+            while True:
+                res = run_item(
+                    src, dst, item.rel_path, admin=admin,
+                    mt=preset["mt"], ipg=preset["ipg"], zb=preset["zb"],
+                    stall_after=STALL_AFTER,
+                    extra_xd=item.extra_xd, extra_xf=item.extra_xf,
+                    on_line=lambda l: _emit(on_event, ("log", l)),
+                    on_file=lambda n: _emit(on_event, ("file", n)),
+                    cancel=cancel)
+                if not res.stalled or res.cancelled:
+                    break
+                if auto_reset and letter and resets < MAX_RESETS:
+                    resets += 1
+                    _emit(on_event, ("phase",
+                                     f"{letter}: stalled — resetting "
+                                     f"drive ({resets}/{MAX_RESETS})"))
+                    if reset_drive(
+                            letter,
+                            lambda m: _emit(on_event, ("log", m))):
+                        _emit(on_event, ("log",
+                                         f":: retrying {item.label} "
+                                         "(completed files skip, /Z "
+                                         "resumes partial file)"))
+                        continue
+                    _emit(on_event, ("log",
+                                     f"!! reset failed — giving up on "
+                                     f"{item.label}"))
+                else:
+                    _emit(on_event, ("log",
+                                     "!! stalled — enable 'auto-reset "
+                                     "frozen drive' or recovery mode"))
+                break
             res.rel_path = item.rel_path
             results.append(res)
             _emit(on_event, ("item_done", item.label, res))

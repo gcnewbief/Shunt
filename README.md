@@ -64,6 +64,33 @@ compression.
   locked files will fail into the report.
 - No VSS — files locked on a running source system are skipped.
 
+## Failing drives — gentle / recovery mode
+
+The Backup tab has a SPEED selector:
+
+- **full** — `/MT:16`, no throttle. Healthy drives.
+- **gentle** — single-threaded + `/IPG:10` (~6 MB/s). Less I/O pressure,
+  less heat.
+- **recovery** — single-threaded + `/IPG:50` (~1 MB/s) + `/ZB`
+  restartable, so a partially-copied file resumes mid-file after a
+  reset instead of starting over.
+
+**Freeze watchdog:** every copy monitors the robocopy process's actual
+I/O byte counter (not output silence — a big file copies quietly for
+minutes). ~3 minutes of zero I/O = frozen → the item is failed, not the
+whole run.
+
+**auto-reset frozen drive:** on a stall, the source disk's PNP device is
+disabled/re-enabled via `pnputil` (forces re-enumeration — works on most
+USB docks; actual power-cycle is dock-dependent), waits for the volume,
+then retries the item. `/Z` + identical-skip means it resumes where it
+left off. Up to 5 resets per item, then it fails into the report. The
+"reset drive now" button does a manual reset on the source drive letter.
+System volume is never reset.
+
+Tip: recovery mode + tick the most valuable folders first (Documents,
+browsers) — the tree order is roughly importance-first already.
+
 ## Reports
 
 `shunt_report.txt` (backups) / `shunt_restore_report.txt` (restores)

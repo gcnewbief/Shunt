@@ -17,7 +17,7 @@ from PIL import Image
 
 from . import __version__, elevate
 from .core import backup as backup_core
-from .core import catalog, profiles
+from .core import catalog, disk, profiles
 from .core import restore as restore_core
 from .ui import theme
 from .ui.tooltip import Tooltip
@@ -139,6 +139,7 @@ class _JobPanel(ctk.CTkFrame):
         self._item_i = self._item_n = 0
         self._item_label = ""
         self._start_label = ""
+        self._bg = False   # background op (manual drive reset) in flight
 
     # ---- console ----
     def log(self, msg: str) -> None:
@@ -177,7 +178,7 @@ class _JobPanel(ctk.CTkFrame):
             pass
         if logs or skipped:
             self._flush_logs(logs, skipped)
-        if self.running:
+        if self.running or self._bg:
             self.after(20, self._drain)
 
     def _flush_logs(self, lines: list[str], skipped: int) -> None:
@@ -369,6 +370,41 @@ class BackupPanel(_JobPanel):
         ctk.CTkButton(right, text="browse…", command=self._browse_dest,
                       **theme.W["button"]).pack(padx=10, anchor="w")
 
+        ctk.CTkLabel(right, text="SPEED", font=theme.FONT_BOLD,
+                     text_color=theme.TEXT_DIM
+                     ).pack(anchor="w", padx=10, pady=(14, 2))
+        self.speed_var = tk.StringVar(value="full")
+        for val, text, tip in (
+            ("full", "full speed", "multithreaded, no throttle — healthy drives"),
+            ("gentle", "gentle (~6 MB/s)", "single-thread + /IPG throttle — flaky drives"),
+            ("recovery", "recovery (~1 MB/s)", "slowest; /ZB so partial files resume after resets"),
+        ):
+            rb = ctk.CTkRadioButton(
+                right, text=text, variable=self.speed_var, value=val,
+                font=theme.FONT, text_color=theme.TEXT,
+                fg_color=theme.GREEN, hover_color=theme.GREEN_HOVER)
+            rb.pack(anchor="w", padx=12, pady=1)
+            Tooltip(rb, tip)
+
+        self.reset_var = tk.BooleanVar(value=False)
+        cb = ctk.CTkCheckBox(
+            right, text="auto-reset frozen drive", variable=self.reset_var,
+            font=theme.FONT, text_color=theme.TEXT, fg_color=theme.GREEN,
+            hover_color=theme.GREEN_HOVER, checkbox_height=18,
+            checkbox_width=18, corner_radius=3)
+        cb.pack(anchor="w", padx=10, pady=(10, 0))
+        Tooltip(cb, "if the source produces no I/O for ~3 min, the disk is\n"
+                    "disabled/re-enabled via pnputil and the copy resumes\n"
+                    "(completed files skip; /Z resumes partial files).\n"
+                    "whether it actually power-cycles depends on the dock.")
+
+        rb2 = ctk.CTkButton(right, text="reset drive now", width=120,
+                            command=self._reset_drive, **theme.W["button"])
+        rb2.pack(anchor="w", padx=10, pady=(8, 0))
+        Tooltip(rb2, "disable + re-enable the source drive's disk device\n"
+                     "(pnputil). only works if source is a drive letter\n"
+                     "like D:\\ — never touches the system disk.")
+
         ctk.CTkLabel(
             right, font=theme.FONT_MONO, text_color=theme.TEXT_DIM,
             justify="left", anchor="w",
@@ -457,6 +493,28 @@ class BackupPanel(_JobPanel):
         for j, child in enumerate(item.children):
             self._add_item(iid, f"{iid}.{j}", child)
 
+    def _reset_drive(self) -> None:
+        letter = Path(self.src_var.get().strip().strip('"')).drive[:1]
+        if not letter:
+            self.log("!! source has no drive letter — pick a drive path")
+            return
+        if disk.is_system_volume(letter):
+            self.log("!! refusing to reset the system volume")
+            return
+        self.log(f":: resetting drive {letter}: …")
+        self._bg = True
+        self.after(20, self._drain)
+
+        def work() -> None:
+            try:
+                ok = disk.reset_drive(
+                    letter, lambda m: self.q.put(("log", m)))
+                self.q.put(("log", f":: reset {letter}: "
+                                   f"{'ok' if ok else 'FAILED'}"))
+            finally:
+                self._bg = False
+        threading.Thread(target=work, daemon=True).start()
+
     # ---- destination ----
     def _dest_mode_changed(self) -> None:
         self._suggest_dest(force=True)
@@ -496,10 +554,14 @@ class BackupPanel(_JobPanel):
         if not str(dest):
             return
         mode = self.dest_mode.get()
-        self.log(f":: backup {self.profile_root} → {dest} [{mode}]")
+        self.log(f":: backup {self.profile_root} → {dest} "
+                 f"[{mode} · {self.speed_var.get()}"
+                 f"{' +auto-reset' if self.reset_var.get() else ''}]")
         self._start(backup_core.run_backup,
                     dict(profile_root=self.profile_root, items=items,
                          dest=dest, mode=mode, admin=self.admin,
+                         speed=self.speed_var.get(),
+                         auto_reset=self.reset_var.get(),
                          on_event=self.q.put, cancel=self.cancel))
 
 

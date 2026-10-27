@@ -77,6 +77,12 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
   don't "optimize" that into pure-Python reads or ACL-denied drives
   will fail. Leftover `.ShuntBackup_*.staging` dirs = interrupted zip
   backups, safe to delete.
+- **Freeze detection watches I/O counters, not output.** A huge file
+  produces no stdout for minutes while slowly copying — silence ≠ hung.
+  `copier._proc_read_bytes` (GetProcessIoCounters) distinguishes frozen
+  drives from slow ones; watchdog kills only on zero-I/O for STALL_AFTER
+  (180s). Recovery mode adds `/ZB` + `/IPG:50`; `disk.reset_drive` does
+  pnputil disable/enable by drive letter and refuses the system volume.
 - **robocopy skips = feature.** Identical files (size+timestamp) skip
   on re-runs — that's incremental backup, not a block. "force
   overwrite" (restore only) adds `/IS` / disables zip same-size skip.

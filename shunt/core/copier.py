@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import ctypes
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +32,27 @@ _SUM_RE = re.compile(r"^\s*(Dirs|Files)\s*:\s*(.+)$")
 _NAME_RE = re.compile(r"\t([^\t]+)$")
 
 
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [(n, ctypes.c_ulonglong) for n in (
+        "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+        "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+
+def _proc_read_bytes(pid: int) -> int | None:
+    """Total bytes read by a process — None if we can't query it.
+
+    Used for freeze detection: a hung drive shows a frozen counter,
+    while a slow-but-alive copy keeps advancing it.
+    """
+    h = ctypes.windll.kernel32.OpenProcess(0x0400, False, pid)  # QUERY_INFORMATION
+    if not h:
+        return None
+    c = _IO_COUNTERS()
+    ok = ctypes.windll.kernel32.GetProcessIoCounters(h, ctypes.byref(c))
+    ctypes.windll.kernel32.CloseHandle(h)
+    return c.ReadTransferCount if ok else None
+
+
 @dataclass
 class ItemResult:
     rel_path: str
@@ -38,6 +61,7 @@ class ItemResult:
     files_failed: int = 0
     errors: list[str] = field(default_factory=list)
     cancelled: bool = False
+    stalled: bool = False    # killed by the freeze watchdog
 
     @property
     def ok(self) -> bool:
@@ -46,11 +70,18 @@ class ItemResult:
 
 
 def build_args(src: Path, dst: Path, *, admin: bool, overwrite: bool = False,
+               mt: int = 16, ipg: int = 0, zb: bool = False,
                extra_xd: tuple = (), extra_xf: tuple = ()) -> list[str]:
     args = ["robocopy", str(src), str(dst), "/E", "/COPY:DAT", "/DCOPY:T",
-            "/R:1", "/W:1", "/XJ", "/XA:O", "/MT:16", "/NP"]
+            "/R:1", "/W:1", "/XJ", "/XA:O", "/NP"]
+    if mt > 1:
+        args.append(f"/MT:{mt}")
+    if ipg > 0:
+        args.append(f"/IPG:{ipg}")
     if admin:
-        args.append("/B")
+        args.append("/ZB" if zb else "/B")  # /ZB = restartable, /B fallback
+    elif zb:
+        args.append("/Z")
     if overwrite:
         args.append("/IS")   # include "same" files — force re-copy
     xf = sorted(set(GLOBAL_XF) | set(extra_xf))
@@ -64,6 +95,8 @@ def build_args(src: Path, dst: Path, *, admin: bool, overwrite: bool = False,
 
 def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
              overwrite: bool = False,
+             mt: int = 16, ipg: int = 0, zb: bool = False,
+             stall_after: int = 0,
              extra_xd: tuple = (), extra_xf: tuple = (),
              on_line: Callable[[str], None] | None = None,
              on_file: Callable[[str], None] | None = None,
@@ -75,6 +108,7 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
         return res
 
     args = build_args(src, dst, admin=admin, overwrite=overwrite,
+                      mt=mt, ipg=ipg, zb=zb,
                       extra_xd=extra_xd, extra_xf=extra_xf)
     if on_line:
         on_line("> " + " ".join(args))
@@ -89,12 +123,45 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
         res.exit_code = 16
         return res
 
+    # freeze watchdog: drive is "dead" only if BOTH output and the
+    # process's I/O byte counter stop advancing — a slow large file
+    # produces no output lines but keeps incrementing I/O
+    state = {"t": time.monotonic(), "io": _proc_read_bytes(proc.pid),
+             "warned": False}
+
+    def _touch() -> None:
+        state["t"] = time.monotonic()
+
+    if stall_after > 0:
+        def _watchdog() -> None:
+            while proc.poll() is None:
+                time.sleep(5)
+                io = _proc_read_bytes(proc.pid)
+                if io is not None and io != state["io"]:
+                    state["io"] = io
+                    _touch()
+                idle = time.monotonic() - state["t"]
+                if not state["warned"] and idle > stall_after * 0.6:
+                    state["warned"] = True
+                    if on_line:
+                        on_line(f"!! no I/O for {int(idle)}s — "
+                                "drive may be frozen")
+                if idle > stall_after:
+                    res.stalled = True
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                    return
+        threading.Thread(target=_watchdog, daemon=True).start()
+
     last_file_emit = 0.0
     try:
         for raw in proc.stdout:
             line = raw.rstrip("\r\n")
             if not line.strip():
                 continue
+            _touch()
             if cancel is not None and cancel.is_set():
                 proc.kill()
                 res.cancelled = True
@@ -129,4 +196,6 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
 
     if not res.cancelled:
         res.exit_code = proc.returncode
+    else:
+        res.stalled = False
     return res
