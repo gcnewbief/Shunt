@@ -7,6 +7,7 @@ drives, then compresses the staging dir.
 from __future__ import annotations
 
 import shutil
+import struct
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,23 @@ def _emit(on_event: Event_ | None, evt: tuple) -> None:
 
 
 _FILE_ATTRIBUTE_OFFLINE = 0x1000
+_DOS_MIN = (1980, 1, 1, 0, 0, 0)
+_DOS_MAX = (2107, 12, 31, 23, 59, 58)
+
+
+def _safe_dt(mtime: float) -> tuple[tuple, bool]:
+    """DOS-range zip timestamp, and whether it was clamped — old drives
+    carry corrupt mtimes (year 2408 etc.) that overflow the 16-bit DOS
+    date field."""
+    try:
+        dt = datetime.fromtimestamp(mtime)
+    except (OverflowError, OSError, ValueError):
+        return _DOS_MIN, True
+    if dt.year < 1980:
+        return _DOS_MIN, True
+    if dt.year > 2107:
+        return _DOS_MAX, True
+    return dt.timetuple()[:6], False
 
 
 def _zip_dir(src_dir: Path, zip_path: Path,
@@ -50,6 +68,7 @@ def _zip_dir(src_dir: Path, zip_path: Path,
     files = [p for p in src_dir.rglob("*") if p.is_file()]
     total = len(files)
     errors: list[str] = []
+    clamped = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED,
                          compresslevel=6) as zf:
         for i, p in enumerate(files, 1):
@@ -57,15 +76,26 @@ def _zip_dir(src_dir: Path, zip_path: Path,
                 raise InterruptedError("cancelled")
             rel = p.relative_to(src_dir).as_posix()
             try:
-                if p.stat().st_file_attributes & _FILE_ATTRIBUTE_OFFLINE:
+                st = p.stat()
+                if st.st_file_attributes & _FILE_ATTRIBUTE_OFFLINE:
                     errors.append(f"{rel}: cloud placeholder (skipped)")
                     continue
-                zf.write(p, rel)
-            except OSError as e:
+                dtime, was_clamped = _safe_dt(st.st_mtime)
+                clamped += was_clamped
+                zi = zipfile.ZipInfo(rel, date_time=dtime)
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                zi.external_attr = (st.st_mode & 0xFFFF) << 16
+                with open(p, "rb") as src, \
+                        zf.open(zi, "w",
+                                force_zip64=st.st_size > 0x7FFF0000) as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 512)
+            except (OSError, struct.error) as e:
                 errors.append(f"{rel}: {e}")
                 _emit(on_event, ("log", f"!! zip skip {p.name}: {e}"))
             if i % 200 == 0 or i == total:
                 _emit(on_event, ("zip_progress", i, total))
+    if clamped:
+        _emit(on_event, ("log", f":: {clamped} corrupt timestamps clamped"))
     return errors
 
 
