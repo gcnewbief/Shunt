@@ -41,6 +41,10 @@ def seed() -> None:
     w("Music/track.mp3")
     w("AppData/Local/Google/Chrome/User Data/Default/Bookmarks", b"{}")
     w("AppData/Local/Google/Chrome/User Data/Default/Cache/junk.bin")
+    w("AppData/Local/Vivaldi/User Data/Local State", b"{}")
+    w("AppData/Local/Vivaldi/User Data/Default/Bookmarks", b"{}")
+    w("AppData/Roaming/zen/profiles.ini", b"[Profile0]")
+    w("AppData/Roaming/zen/Profiles/abc.default/places.sqlite")
     w("AppData/Roaming/Mozilla/Firefox/Profiles/x.default/places.sqlite")
     w("AppData/Roaming/Microsoft/Signatures/sig.htm")
     w("AppData/Local/Packages/Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe/"
@@ -83,6 +87,10 @@ def main() -> int:
     appdata = next(i for i in items if i.children)
     appdata_labels = {c.label for c in appdata.children}
     check("Google Chrome" in appdata_labels, "Chrome item present", failures)
+    check(any("Vivaldi" in l for l in appdata_labels),
+          "Vivaldi auto-discovered (Chromium)", failures)
+    check(any("zen" in l for l in appdata_labels),
+          "zen auto-discovered (Gecko)", failures)
 
     leaves = [i for i in items if i.rel_path] + \
         [c for i in items for c in i.children if c.rel_path]
