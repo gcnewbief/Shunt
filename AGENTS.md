@@ -29,11 +29,12 @@ shunt/
   app.py            CTk window, tabs, event plumbing, debug-log toggle
   elevate.py        IsUserAnAdmin + runas relaunch (enables robocopy /B)
   core/
-    copier.py       build_args / run_item — the robocopy subprocess runner
+    copier.py       build_args / run_item — robocopy runner + I/O watchdog
+    disk.py         failing-drive support — PNP id lookup, pnputil reset
     catalog.py      CatalogItem tree — WHAT to copy, profile-root-relative
     profiles.py     find/look-like profile dirs; drive_candidates()
     manifest.py     shunt_manifest.json in every backup
-    backup.py       run_backup: folder direct, zip via staging dir
+    backup.py       run_backup — SPEED_PRESETS, zip staging, reset-retry
     restore.py      inspect_backup / run_restore (folder=robocopy, zip=extract)
   ui/
     theme.py        color/font constants (GREEN=#3dff73 etc.)
@@ -77,6 +78,10 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
   don't "optimize" that into pure-Python reads or ACL-denied drives
   will fail. Leftover `.ShuntBackup_*.staging` dirs = interrupted zip
   backups, safe to delete.
+- **Zip staging skips offline-attribute files.** `/B` can carry OneDrive
+  reparse stubs into staging where `zipfile` then dies with
+  ERROR_CANT_ACCESS_FILE. `_zip_dir` skips them by attribute and catches
+  per-file OSError into the report — never let one file kill a zip.
 - **Freeze detection watches I/O counters, not output.** A huge file
   produces no stdout for minutes while slowly copying — silence ≠ hung.
   `copier._proc_read_bytes` (GetProcessIoCounters) distinguishes frozen
@@ -88,7 +93,18 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
   overwrite" (restore only) adds `/IS` / disables zip same-size skip.
   `ERROR 32` in a report = destination file locked by a running app.
 
-## Known limits (by design, v1.0)
+## Cutting a release
+
+1. Bump `shunt/__init__.py:__version__`, `py build.py`, commit.
+2. Tag + release (git has no global identity — use `-c` flags):
+
+   ```
+   git -c user.name="Devin" -c user.email="158243242+devin-ai-integration[bot]@users.noreply.github.com" tag -a vX.Y.Z -m "Shunt vX.Y.Z"
+   git push origin master vX.Y.Z
+   gh release create vX.Y.Z dist/Shunt.exe --repo gcnewbief/Shunt --title "Shunt vX.Y.Z" --notes "…"
+   ```
+
+## Known limits (by design, v1.1)
 
 - Browser passwords don't migrate — DPAPI per-user encryption. Export
   on old machine; README explains.
