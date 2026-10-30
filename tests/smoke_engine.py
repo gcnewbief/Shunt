@@ -159,6 +159,59 @@ def main() -> int:
     check((dest_profile2 / "Documents/sub/deep.txt").is_file(),
           "folder restore: deep.txt", failures)
 
+    print("\n== restore safety ==")
+    # manifest-less dir that looks like a drive root must be refused
+    fake_root = work / "fake_drive"
+    for d in ("Windows", "Program Files", "ProgramData", "Users",
+              "System Volume Information", "$Recycle.Bin"):
+        (fake_root / d).mkdir(parents=True, exist_ok=True)
+    try:
+        restore_core.inspect_backup(fake_root)
+        check(False, "drive-root folder refused at inspect", failures)
+    except ValueError:
+        check(True, "drive-root folder refused at inspect", failures)
+    try:
+        restore_core.run_restore(backup=fake_root, kind="folder",
+                                 rel_items=["Users"],
+                                 dest_profile=work / "Victim",
+                                 admin=admin, on_event=events.append)
+        check(False, "drive-root folder refused at run", failures)
+    except ValueError:
+        check(True, "drive-root folder refused at run", failures)
+
+    # destination inside the backup would recurse — refuse
+    try:
+        restore_core.run_restore(backup=dest_folder, kind="folder",
+                                 rel_items=["Documents"],
+                                 dest_profile=dest_folder / "Inner",
+                                 admin=admin, on_event=events.append)
+        check(False, "dest-inside-backup refused", failures)
+    except ValueError:
+        check(True, "dest-inside-backup refused", failures)
+
+    # junction as a top-level item is neither listed nor copied
+    raw = work / "raw_backup"
+    (raw / "Docs").mkdir(parents=True)
+    (raw / "Docs" / "f.txt").write_bytes(b"hi")
+    subprocess.run(["cmd", "/c", "mklink", "/J",
+                    str(raw / "Loop"), str(raw)], capture_output=True)
+    info3 = restore_core.inspect_backup(raw)
+    check("Loop" not in info3["items"],
+          "junction excluded from inspect items", failures)
+    check("Docs" in info3["items"],
+          "manifest-less dir restore still lists dirs", failures)
+    _, results3 = restore_core.run_restore(
+        backup=raw, kind="folder", rel_items=["Docs", "Loop"],
+        dest_profile=work / "RawTarget", admin=admin,
+        on_event=events.append)
+    loop_res = next(r for r in results3 if r.rel_path == "Loop")
+    check(bool(loop_res.errors), "junction source skipped at copy",
+          failures)
+    check((work / "RawTarget" / "Docs" / "f.txt").is_file(),
+          "raw dir item still restored", failures)
+    check(not (work / "RawTarget" / "Loop").exists(),
+          "no Loop dir created in dest", failures)
+
     # cleanup: strip deny ACE so the mock can be deleted later
     subprocess.run(["icacls", str(PROFILE / "Documents" / "LockedOut"),
                     "/remove:d", "Everyone"], capture_output=True)

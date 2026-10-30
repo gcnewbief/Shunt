@@ -54,7 +54,9 @@ the report; close the customer's browsers first for a cleaner pull.
    Windows profile if it doesn't exist yet — log in once, or just pick
    the profile folder Shunt lists.
 2. RESTORE tab → **backup** picker → choose the backup *folder* or the
-   *.zip* → **inspect**.
+   *.zip* → **inspect**. Never pick a bare drive letter (D:\ etc.) —
+   that's a whole drive, not a backup; Shunt refuses it, but on old
+   builds it would try to restore the entire drive into the profile.
 3. Shunt finds `shunt_manifest.json` and lists what the backup contains.
    Tick what you want landed.
 4. **target profile** dropdown → the new username. Paths are
@@ -100,6 +102,8 @@ not yet freezing.
 | Window gray / "not responding" | Shouldn't happen post-v1.0. If it does, enable **debug log** (top-right), reproduce, grab `Desktop\shunt_debug.log`. |
 | Items failed in the report | Read the `!` lines — `ERROR 32` = file locked (close apps), `ERROR 5` = access denied (did you UAC?). |
 | Stuck `shunt_staging_*` folder after a crashed zip backup | `tools\kill-staging.ps1` from the repo — run `powershell -ExecutionPolicy Bypass -File kill-staging.ps1 -Path "<path>"`. Safe to delete; it's a temp dir. |
+| Restore refuses my backup folder | Only happens if it has no manifest *and* looks like a drive root (contains Windows/Program Files/Users…). Point it at the actual backup folder Shunt made — never at a drive letter itself. |
+| Restore copied garbage / huge recursion (pre-1.2.3) | A drive root was used as the backup source. Delete the dumped folders from the profile (`kill-staging.ps1` helps with deep trees) and re-run against a real backup folder or zip. |
 | Old `.ShuntBackup_*.staging` folder won't delete (pre-1.2.2) | Same script handles the dot-name + deep-path problem. |
 | Browser passwords missing after restore | Expected — DPAPI. Export/import passwords separately. |
 | Restore skipped files that should have copied | Tick **force overwrite** — the skip logic compares size+date and can pass over corrupt same-size files. |

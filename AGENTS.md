@@ -93,6 +93,17 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
 - **robocopy skips = feature.** Identical files (size+timestamp) skip
   on re-runs — that's incremental backup, not a block. "force
   overwrite" (restore only) adds `/IS` / disables zip same-size skip.
+- **Manifest-less restore sources are guarded.** Real incident: pointing
+  restore at `D:\` (old OS drive) enumerated every root dir as an item
+  and dumped ~1.8TB incl. junction loops into the target profile.
+  `inspect_backup` refuses drive roots and dirs matching
+  `_DRIVE_ROOT_HINTS` without a manifest; `run_restore` re-checks,
+  refuses source/dest overlap, and skips reparse-point item sources
+  (`lstat` — `stat()` follows the link and misses it). `/XJ` does NOT
+  cover dir symlinks or a junction used as the *source root*, so
+  `run_item` also kills any copy whose paths exceed `max_rel_depth`
+  (40) — that's the loop canary. `tools/kill-staging.ps1` force-deletes
+  the fallout in the field.
   `ERROR 32` in a report = destination file locked by a running app.
 
 ## Cutting a release

@@ -9,3 +9,4 @@ shunt_report*.txt
 ShuntBackup_*/
 ShuntBackup_*.zip
 tests/mock_drive/
+Recursion error log/

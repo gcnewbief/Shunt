@@ -96,7 +96,7 @@ def build_args(src: Path, dst: Path, *, admin: bool, overwrite: bool = False,
 def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
              overwrite: bool = False,
              mt: int = 16, ipg: int = 0, zb: bool = False,
-             stall_after: int = 0,
+             stall_after: int = 0, max_rel_depth: int = 40,
              extra_xd: tuple = (), extra_xf: tuple = (),
              on_line: Callable[[str], None] | None = None,
              on_file: Callable[[str], None] | None = None,
@@ -156,6 +156,8 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
         threading.Thread(target=_watchdog, daemon=True).start()
 
     last_file_emit = 0.0
+    src_prefix = str(src).rstrip("\\").lower() + "\\"
+    src_parts = len(Path(str(src).rstrip("\\")).parts)
     try:
         for raw in proc.stdout:
             line = raw.rstrip("\r\n")
@@ -166,6 +168,21 @@ def run_item(src: Path, dst: Path, rel_path: str, *, admin: bool,
                 proc.kill()
                 res.cancelled = True
                 break
+            # runaway-recursion guard: a junction/symlink loop shows up
+            # as dir rows whose path plunges far below any real tree.
+            # /XJ misses dir symlinks, so depth is the safety net.
+            if "Dir" in line or "\\" in line:
+                nm = _NAME_RE.search(line)
+                if nm:
+                    tail = nm.group(1).strip().rstrip("\\").lower()
+                    if tail.startswith(src_prefix):
+                        depth = len(Path(tail).parts) - src_parts
+                        if depth > max_rel_depth:
+                            res.errors.append(
+                                f"runaway depth ({depth} levels) — "
+                                "junction/symlink loop? item killed")
+                            proc.kill()
+                            break
             m = _ERR_RE.search(line)
             if m:
                 name = _NAME_RE.search(line)
