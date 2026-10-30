@@ -95,6 +95,28 @@ not yet freezing.
 
 ---
 
+## The NUKE tab
+
+For deleting stuck folders — leftover `shunt_staging_*` dirs,
+junction-loop trees from the pre-1.2.3 restore bug, or any stubborn
+customer-drive directory.
+
+1. NUKE tab → **browse** (or paste the path) → **✕ NUKE IT**.
+2. Confirm the scary dialog — this is permanent, no recycle bin.
+3. It escalates automatically: relocate to drive root → attribute
+   strip → long-path deleter → takeown/icacls → robocopy empty-mirror →
+   `rd` on the extended and 8.3 paths. Progress bar shows real
+   file-by-file deletion.
+4. Writes `shunt_nuke_report.txt` on your Desktop.
+
+Safety rails: drive roots, drive-root system dirs (Windows, Users,
+Program Files…) and your own logged-in profile are refused. Junctions
+inside the tree are unlinked, never followed — a junction pointing
+outside the tree can't leak the delete.
+
+If a folder survives everything, the report says what remains — usually
+an open handle (reboot, nuke first thing) or NTFS damage (`chkdsk /f`).
+
 ## Troubleshooting
 
 | Symptom | What to do |

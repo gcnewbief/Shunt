@@ -17,7 +17,7 @@ from PIL import Image
 
 from . import __version__, elevate
 from .core import backup as backup_core
-from .core import catalog, disk, profiles
+from .core import catalog, disk, nuker, profiles
 from .core import restore as restore_core
 from .ui import theme
 from .ui.tooltip import Tooltip
@@ -87,6 +87,7 @@ class ShuntApp(ctk.CTk):
         self.tabs.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.tabs.add("  BACKUP — pull from old drive  ")
         self.tabs.add("  RESTORE — import into profile  ")
+        self.tabs.add("  NUKE — force-delete stuck dirs  ")
 
         self.backup_tab = BackupPanel(self.tabs.tab("  BACKUP — pull from old drive  "),
                                       admin=self.admin)
@@ -94,6 +95,9 @@ class ShuntApp(ctk.CTk):
         self.restore_tab = RestorePanel(self.tabs.tab("  RESTORE — import into profile  "),
                                         admin=self.admin)
         self.restore_tab.pack(fill="both", expand=True)
+        self.nuke_tab = NukePanel(self.tabs.tab("  NUKE — force-delete stuck dirs  "),
+                                  admin=self.admin)
+        self.nuke_tab.pack(fill="both", expand=True)
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color=theme.BG, height=34)
@@ -125,6 +129,7 @@ class ShuntApp(ctk.CTk):
         if p:
             self.backup_tab.log(f":: debug log → {p}")
             self.restore_tab.log(f":: debug log → {p}")
+            self.nuke_tab.log(f":: debug log → {p}")
 
 
 class _JobPanel(ctk.CTkFrame):
@@ -741,6 +746,147 @@ class RestorePanel(_JobPanel):
                          rel_items=[str(i) for i in items],
                          dest_profile=dest, admin=self.admin,
                          overwrite=self.overwrite_var.get(),
+                         on_event=self.q.put, cancel=self.cancel))
+
+
+class NukePanel(_JobPanel):
+    """Force-delete stuck folders — the GUI front end of kill-staging.ps1."""
+
+    def __init__(self, master, *, admin: bool):
+        super().__init__(master, admin=admin)
+        self._build()
+
+    def _build(self) -> None:
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=3)
+
+        # --- target row ---
+        top = ctk.CTkFrame(self, **theme.W["frame"])
+        top.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        try:
+            self._nuke_img = ctk.CTkImage(
+                Image.open(_res("nuke.png")), size=(30, 30))
+            ctk.CTkLabel(top, text="", image=self._nuke_img
+                         ).pack(side="left", padx=(10, 2))
+        except Exception:
+            pass
+        ctk.CTkLabel(top, text="TARGET", font=theme.FONT_BOLD,
+                     text_color=theme.TEXT_DIM).pack(side="left", padx=8)
+        self.path_var = tk.StringVar()
+        ctk.CTkEntry(top, textvariable=self.path_var,
+                     **theme.W["entry"]).pack(
+            side="left", fill="x", expand=True, padx=4, pady=8)
+        ctk.CTkButton(top, text="browse", width=80,
+                      command=self._browse, **theme.W["button"]
+                      ).pack(side="left", padx=(4, 10))
+
+        # --- options + big red button ---
+        mid = ctk.CTkFrame(self, fg_color=theme.BG)
+        mid.grid(row=1, column=0, sticky="nsew", padx=4)
+        mid.grid_columnconfigure(1, weight=1)
+
+        right = ctk.CTkFrame(mid, **theme.W["frame"])
+        right.grid(row=0, column=0, sticky="nw")
+        self.relocate_var = tk.BooleanVar(value=True)
+        rl = ctk.CTkCheckBox(
+            right, text="relocate to drive root first",
+            variable=self.relocate_var, font=theme.FONT,
+            text_color=theme.TEXT, fg_color=theme.GREEN,
+            hover_color=theme.GREEN_HOVER, checkbox_height=18,
+            checkbox_width=18, corner_radius=3)
+        rl.pack(anchor="w", padx=10, pady=(10, 0))
+        Tooltip(rl, "moves the tree to <drive>:\\_shunt_del before\n"
+                    "deleting — instant, and every path inside gets\n"
+                    "shorter. usually the difference on deep trees.")
+        ctk.CTkLabel(
+            right, font=theme.FONT_MONO, text_color=theme.TEXT_DIM,
+            justify="left", anchor="w",
+            text=("\nescalation, in order:\n"
+                  "  1. relocate to drive root\n"
+                  "  2. scan + strip attributes\n"
+                  "  3. python deleter (long paths)\n"
+                  "  4. takeown + icacls, retry\n"
+                  "  5. robocopy empty-mirror\n"
+                  "  6. rd /s /q via \\\\?\\ and 8.3\n")
+        ).pack(anchor="w", padx=10)
+
+        side = ctk.CTkFrame(mid, fg_color="transparent")
+        side.grid(row=0, column=1, sticky="nse", padx=10)
+
+        warn = ctk.CTkFrame(side, **theme.W["frame"])
+        warn.pack(side="top", anchor="e", pady=(10, 4))
+        ctk.CTkLabel(
+            warn, font=theme.FONT_MONO, text_color=theme.AMBER,
+            justify="left", anchor="w",
+            text=("no recycle bin. no undo.\n"
+                  "drive roots, system dirs,\n"
+                  "and your own profile are\n"
+                  "refused — everything else\n"
+                  "is fair game.")
+        ).pack(padx=12, pady=10)
+
+        btns = ctk.CTkFrame(side, fg_color="transparent")
+        btns.pack(side="bottom", anchor="e", pady=10)
+        self._start_label = "✕ NUKE IT"
+        try:
+            self._btn_img = ctk.CTkImage(
+                Image.open(_res("nuke.png")), size=(18, 18))
+        except Exception:
+            self._btn_img = None
+        self.start_btn = ctk.CTkButton(
+            btns, text=self._start_label, image=self._btn_img,
+            compound="left", font=theme.FONT_BOLD,
+            fg_color="#3a1212", hover_color=theme.RED,
+            text_color="#ffd7d7", border_color=theme.RED, border_width=1,
+            width=180, command=self._start_nuke)
+        self.start_btn.pack(side="left", padx=(0, 4))
+        Tooltip(self.start_btn,
+                "PERMANENTLY deletes the target folder and everything\n"
+                "inside it — no recycle bin, no undo. For stuck staging\n"
+                "dirs, junction-loop trees, and failed copy leftovers.")
+        self.cancel_btn = ctk.CTkButton(
+            btns, text="✕", width=40, fg_color="#3a1212",
+            hover_color=theme.RED, text_color="#ffd7d7",
+            state="disabled", command=self._cancel)
+        self.cancel_btn.pack(side="left")
+
+        self._build_console(self)
+
+    def _browse(self) -> None:
+        p = filedialog.askdirectory(title="Folder to delete")
+        if p:
+            self.path_var.set(p)
+
+    def _on_panel_event(self, evt: tuple) -> None:
+        if evt[0] == "nuke_count":
+            self.status.configure(
+                text=f"scanning… {evt[1]:,} entries found")
+        elif evt[0] == "nuke_progress":
+            _, done, total = evt
+            if total:
+                self.progress.set(min(done / total, 1.0))
+            self.status.configure(text=f"deleting… {done:,}/{total:,}")
+
+    def _start_nuke(self) -> None:
+        p = Path(self.path_var.get().strip().strip('"'))
+        if not p.exists():
+            messagebox.showerror("Shunt", "Target doesn't exist.")
+            return
+        reason = nuker.refuse_reason(p)
+        if reason:
+            messagebox.showerror("Shunt", reason)
+            self.log(f":: refused — {reason}")
+            return
+        if not messagebox.askyesno(
+                "Shunt — NUKE",
+                f"PERMANENTLY delete\n\n{p}\n\nand everything inside "
+                "it?\n\nNo recycle bin. No undo."):
+            return
+        self.log(f":: NUKE {p}")
+        self._start(nuker.nuke_dir,
+                    dict(path=p, admin=self.admin,
+                         relocate=self.relocate_var.get(),
                          on_event=self.q.put, cancel=self.cancel))
 
 

@@ -36,12 +36,16 @@ shunt/
     manifest.py     shunt_manifest.json in every backup
     backup.py       run_backup — SPEED_PRESETS, zip staging, reset-retry
     restore.py      inspect_backup / run_restore (folder=robocopy, zip=extract)
+    nuker.py        NUKE tab engine — escalating force-delete w/ progress
   ui/
     theme.py        color/font constants (GREEN=#3dff73 etc.)
     tree.py         CheckTree — [ ]/[x]/[-] glyph checkboxes
     tooltip.py      hover tooltips
 tools/make_icon.py  draws the bulldozer mascot
+tools/make_nuke_icon.py  draws the NUKE tab trefoil (assets/nuke.png)
+tools/kill-staging.ps1   standalone version of the nuker for field use
 tests/smoke_engine.py
+tests/nuke_engine_check.py  nuker escalation + refuse_reason checks
 ```
 
 UI↔engine contract: worker threads emit tuples on a `queue.Queue`;
@@ -103,7 +107,11 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
   cover dir symlinks or a junction used as the *source root*, so
   `run_item` also kills any copy whose paths exceed `max_rel_depth`
   (40) — that's the loop canary. `tools/kill-staging.ps1` force-deletes
-  the fallout in the field.
+  the fallout in the field; the NUKE tab (`core/nuker.py` + `NukePanel`)
+  does the same in-app with count-then-delete progress. Reparse points
+  are unlinked via `os.rmdir`, never descended — a junction inside a
+  target tree may point outside it. `refuse_reason` blocks drive roots,
+  drive-root system dirs, and %USERPROFILE%.
   `ERROR 32` in a report = destination file locked by a running app.
 
 ## Cutting a release
