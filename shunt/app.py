@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -17,7 +18,7 @@ from PIL import Image
 
 from . import __version__, elevate
 from .core import backup as backup_core
-from .core import catalog, disk, nuker, profiles
+from .core import catalog, disk, nuker, profiles, update
 from .core import restore as restore_core
 from .ui import theme
 from .ui.tooltip import Tooltip
@@ -99,6 +100,8 @@ class ShuntApp(ctk.CTk):
                                   admin=self.admin)
         self.nuke_tab.pack(fill="both", expand=True)
 
+        self.after(1500, self._check_update)
+
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color=theme.BG, height=34)
         bar.pack(fill="x", padx=10, pady=(8, 0))
@@ -123,6 +126,9 @@ class ShuntApp(ctk.CTk):
                         hover_color=theme.GREEN_HOVER,
                         checkbox_height=16, checkbox_width=16,
                         corner_radius=2).pack(side="right", padx=10)
+        self.update_lbl = ctk.CTkLabel(bar, text="", font=theme.FONT_MONO,
+                                       text_color=theme.TEXT_DIM)
+        self.update_lbl.pack(side="right", padx=8)
 
     def _toggle_debug(self) -> None:
         p = _set_debug(self.debug_var.get())
@@ -130,6 +136,44 @@ class ShuntApp(ctk.CTk):
             self.backup_tab.log(f":: debug log → {p}")
             self.restore_tab.log(f":: debug log → {p}")
             self.nuke_tab.log(f":: debug log → {p}")
+
+    def _check_update(self) -> None:
+        # tkinter isn't thread-safe — the worker stores the result and
+        # _poll_update applies it on the UI thread (same pattern as the
+        # panels' queue drain)
+        self._update_result = None
+        self._update_polls = 0
+
+        def work() -> None:
+            try:
+                self._update_result = update.latest_release()
+            except Exception:
+                self._update_result = ("err",)
+        threading.Thread(target=work, daemon=True).start()
+        self.after(400, self._poll_update)
+
+    def _poll_update(self) -> None:
+        if self._update_result is None:
+            self._update_polls += 1
+            if self._update_polls < 30:
+                self.after(400, self._poll_update)
+            return
+        if self._update_result == ("err",):
+            _dbg(":: update check failed")
+            return
+        tag, url = self._update_result
+        _dbg(f":: update check — latest {tag}, running {__version__}")
+        if update.is_newer(tag, __version__):
+            self._show_update(tag, url)
+        else:
+            self.update_lbl.configure(text=f"v{__version__} · up to date")
+
+    def _show_update(self, tag: str, url: str) -> None:
+        self.update_lbl.configure(text=f"» update {tag}",
+                                  text_color=theme.AMBER, cursor="hand2")
+        self.update_lbl.bind("<Button-1>", lambda _e: webbrowser.open(url))
+        Tooltip(self.update_lbl, "newer Shunt release on GitHub —\n"
+                                 "click to open the download page")
 
 
 class _JobPanel(ctk.CTkFrame):
@@ -356,13 +400,25 @@ class BackupPanel(_JobPanel):
 
         right = ctk.CTkFrame(mid, **theme.W["frame"])
         right.grid(row=0, column=1, sticky="nsew")
-        ctk.CTkLabel(right, text="DESTINATION", font=theme.FONT_BOLD,
+        right.grid_rowconfigure(0, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        # options scroll — keeps the start button pinned visible on
+        # short windows instead of pushed off the bottom of the panel
+        opts = ctk.CTkScrollableFrame(
+            right, fg_color=theme.PANEL, corner_radius=4,
+            scrollbar_fg_color=theme.PANEL,
+            scrollbar_button_color=theme.GREEN_DARK,
+            scrollbar_button_hover_color=theme.GREEN_HOVER)
+        opts.grid(row=0, column=0, sticky="nsew")
+
+        ctk.CTkLabel(opts, text="DESTINATION", font=theme.FONT_BOLD,
                      text_color=theme.TEXT_DIM).pack(anchor="w", padx=10, pady=(10, 4))
 
         self.dest_mode = tk.StringVar(value="folder")
         for val, text in (("folder", "folder (drive / share)"),
                           ("zip", "zip archive")):
-            ctk.CTkRadioButton(right, text=text, variable=self.dest_mode,
+            ctk.CTkRadioButton(opts, text=text, variable=self.dest_mode,
                                value=val, font=theme.FONT,
                                text_color=theme.TEXT, fg_color=theme.GREEN,
                                hover_color=theme.GREEN_HOVER,
@@ -370,12 +426,12 @@ class BackupPanel(_JobPanel):
                                ).pack(anchor="w", padx=12, pady=2)
 
         self.dest_var = tk.StringVar()
-        ctk.CTkEntry(right, textvariable=self.dest_var,
+        ctk.CTkEntry(opts, textvariable=self.dest_var,
                      **theme.W["entry"]).pack(fill="x", padx=10, pady=(10, 4))
-        ctk.CTkButton(right, text="browse…", command=self._browse_dest,
+        ctk.CTkButton(opts, text="browse…", command=self._browse_dest,
                       **theme.W["button"]).pack(padx=10, anchor="w")
 
-        ctk.CTkLabel(right, text="SPEED", font=theme.FONT_BOLD,
+        ctk.CTkLabel(opts, text="SPEED", font=theme.FONT_BOLD,
                      text_color=theme.TEXT_DIM
                      ).pack(anchor="w", padx=10, pady=(14, 2))
         self.speed_var = tk.StringVar(value="full")
@@ -385,7 +441,7 @@ class BackupPanel(_JobPanel):
             ("recovery", "recovery (~1 MB/s)", "slowest; /ZB so partial files resume after resets"),
         ):
             rb = ctk.CTkRadioButton(
-                right, text=text, variable=self.speed_var, value=val,
+                opts, text=text, variable=self.speed_var, value=val,
                 font=theme.FONT, text_color=theme.TEXT,
                 fg_color=theme.GREEN, hover_color=theme.GREEN_HOVER)
             rb.pack(anchor="w", padx=12, pady=1)
@@ -393,7 +449,7 @@ class BackupPanel(_JobPanel):
 
         self.reset_var = tk.BooleanVar(value=False)
         cb = ctk.CTkCheckBox(
-            right, text="auto-reset frozen drive", variable=self.reset_var,
+            opts, text="auto-reset frozen drive", variable=self.reset_var,
             font=theme.FONT, text_color=theme.TEXT, fg_color=theme.GREEN,
             hover_color=theme.GREEN_HOVER, checkbox_height=18,
             checkbox_width=18, corner_radius=3)
@@ -403,7 +459,7 @@ class BackupPanel(_JobPanel):
                     "(completed files skip; /Z resumes partial files).\n"
                     "whether it actually power-cycles depends on the dock.")
 
-        rb2 = ctk.CTkButton(right, text="reset drive now", width=120,
+        rb2 = ctk.CTkButton(opts, text="reset drive now", width=120,
                             command=self._reset_drive, **theme.W["button"])
         rb2.pack(anchor="w", padx=10, pady=(8, 0))
         Tooltip(rb2, "disable + re-enable the source drive's disk device\n"
@@ -411,7 +467,7 @@ class BackupPanel(_JobPanel):
                      "like D:\\ — never touches the system disk.")
 
         ctk.CTkLabel(
-            right, font=theme.FONT_MONO, text_color=theme.TEXT_DIM,
+            opts, font=theme.FONT_MONO, text_color=theme.TEXT_DIM,
             justify="left", anchor="w",
             text=("\n"
                   "copies: docs · pics · vids · music ·\n"
@@ -428,7 +484,7 @@ class BackupPanel(_JobPanel):
         ).pack(anchor="w", padx=10)
 
         btns = ctk.CTkFrame(right, fg_color="transparent")
-        btns.pack(side="bottom", fill="x", padx=10, pady=10)
+        btns.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
         self._start_label = "▶ START BACKUP"
         self.start_btn = ctk.CTkButton(
             btns, text=self._start_label, font=theme.FONT_BOLD,
@@ -623,17 +679,27 @@ class RestorePanel(_JobPanel):
 
         right = ctk.CTkFrame(mid, **theme.W["frame"])
         right.grid(row=0, column=1, sticky="nsew")
-        ctk.CTkLabel(right, text="RESTORE INTO", font=theme.FONT_BOLD,
+        right.grid_rowconfigure(0, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        opts = ctk.CTkScrollableFrame(
+            right, fg_color=theme.PANEL, corner_radius=4,
+            scrollbar_fg_color=theme.PANEL,
+            scrollbar_button_color=theme.GREEN_DARK,
+            scrollbar_button_hover_color=theme.GREEN_HOVER)
+        opts.grid(row=0, column=0, sticky="nsew")
+
+        ctk.CTkLabel(opts, text="RESTORE INTO", font=theme.FONT_BOLD,
                      text_color=theme.TEXT_DIM).pack(anchor="w", padx=10, pady=(10, 4))
         self.dest_var = tk.StringVar(value=os.environ.get("USERPROFILE", ""))
-        ctk.CTkEntry(right, textvariable=self.dest_var,
+        ctk.CTkEntry(opts, textvariable=self.dest_var,
                      **theme.W["entry"]).pack(fill="x", padx=10, pady=4)
-        ctk.CTkButton(right, text="browse…", command=self._browse_dest,
+        ctk.CTkButton(opts, text="browse…", command=self._browse_dest,
                       **theme.W["button"]).pack(padx=10, anchor="w")
 
         self.overwrite_var = tk.BooleanVar(value=False)
         ow = ctk.CTkCheckBox(
-            right, text="force overwrite", variable=self.overwrite_var,
+            opts, text="force overwrite", variable=self.overwrite_var,
             font=theme.FONT, text_color=theme.TEXT, fg_color=theme.GREEN,
             hover_color=theme.GREEN_HOVER, checkbox_height=18,
             checkbox_width=18, corner_radius=3)
@@ -643,7 +709,7 @@ class RestorePanel(_JobPanel):
                     "slower, but guarantees a full rewrite.")
 
         ctk.CTkLabel(
-            right, font=theme.FONT_MONO, text_color=theme.TEXT_DIM,
+            opts, font=theme.FONT_MONO, text_color=theme.TEXT_DIM,
             justify="left", anchor="w",
             text=("\npaths in the backup are\n"
                   "profile-relative, so they\n"
@@ -656,7 +722,7 @@ class RestorePanel(_JobPanel):
         ).pack(anchor="w", padx=10)
 
         btns = ctk.CTkFrame(right, fg_color="transparent")
-        btns.pack(side="bottom", fill="x", padx=10, pady=10)
+        btns.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
         self._start_label = "▶ START RESTORE"
         self.start_btn = ctk.CTkButton(
             btns, text=self._start_label, font=theme.FONT_BOLD,

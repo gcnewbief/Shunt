@@ -76,6 +76,11 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
   while the worker keeps copying. Log floods collapse with a skip
   counter; `file` events throttled to 10/s at the source;
   `inspect_backup` runs in a thread (zip `namelist()` is slow).
+- **Treeview `bbox()` spans the whole row.** It returns the full-row
+  rect regardless of indent, so hit-testing checkboxes against a fixed
+  left margin misses nested `[x]` glyphs and swallows the expand arrow.
+  `CheckTree._on_click` uses `identify_element` — clicks on the item
+  toggle it; `indicator` falls through to default expand/collapse.
 - **Glyph safety:** stick to cp1252-safe glyphs in button/label text —
   `⟳`/`✓` may not render; `»`, `·`, `✕` are safe.
 - **Zip mode stages through robocopy first** so `/B` still applies —

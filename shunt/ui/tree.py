@@ -63,10 +63,13 @@ class CheckTree(ttk.Treeview):
     def _fix_ancestors(self, iid: str) -> None:
         parent = self.parent(iid)
         while parent:
-            kids = self.get_children(parent)
-            states = [self._state[c] for c in kids]
-            self._state[parent] = (all(states) if all(s is not None for s in states)
-                                   else (None if any(s for s in states) else False))
+            states = [self._state[c] for c in self.get_children(parent)]
+            if all(s is True for s in states):
+                self._state[parent] = True
+            elif all(s is False for s in states):
+                self._state[parent] = False
+            else:
+                self._state[parent] = None
             self._refresh(parent)
             parent = self.parent(parent)
 
@@ -77,11 +80,14 @@ class CheckTree(ttk.Treeview):
         iid = self.identify_row(event.y)
         if not iid:
             return None
-        bbox = self.bbox(iid)
-        if bbox and event.x <= bbox[0] + 30:
-            self.toggle(iid)
-            return "break"
-        return None
+        # bbox() spans the whole row regardless of indent, so a fixed
+        # left-margin zone misses nested [x] glyphs and swallows the
+        # expand arrow. Toggle on any click on the item itself; leave
+        # the indicator to the default expand/collapse binding.
+        if self.identify_element(event.x, event.y).endswith("indicator"):
+            return None
+        self.toggle(iid)
+        return "break"
 
     def clear(self) -> None:
         self.delete(*self.get_children())
