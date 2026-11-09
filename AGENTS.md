@@ -81,6 +81,19 @@ placeholders, `/R:1 /W:1` locked files fail fast into the report,
   left margin misses nested `[x]` glyphs and swallows the expand arrow.
   `CheckTree._on_click` uses `identify_element` — clicks on the item
   toggle it; `indicator` falls through to default expand/collapse.
+- **Backup dest inside a copied dir = infinite recursion.** Suggested
+  dests land on the profile's Desktop, which is itself a catalog item —
+  robocopy mirrors the dest/staging dir into itself until the depth
+  canary fires. `run_backup` resolves `work` once, refuses when it
+  *contains* the profile, skips items where dest == source, and adds
+  `/XD <work>` per item whose source contains it. `shunt_staging_*` is
+  also in GLOBAL_XD so stale stagings never copy.
+- **`/XD` matches the spelling robocopy was invoked with.** Passing a
+  `resolve()`d path silently fails when the source arg contains 8.3 or
+  junction components — the exclusion must be spelled as
+  `src / work.relative_to(src.resolve())`. Test containment on resolved
+  paths; spell the arg on the unresolved one. Same trap for `in
+  parents` direction: `src in work.parents` = work inside src.
 - **Glyph safety:** stick to cp1252-safe glyphs in button/label text —
   `⟳`/`✓` may not render; `»`, `·`, `✕` are safe.
 - **Zip mode stages through robocopy first** so `/B` still applies —

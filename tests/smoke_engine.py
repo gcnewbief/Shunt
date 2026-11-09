@@ -136,6 +136,39 @@ def main() -> int:
     check(info["manifest"] is not None, "manifest readable from zip", failures)
     check("Documents" in info["items"], "Documents in zip items", failures)
 
+    print("\n== backup: dest inside a copied dir ==")
+    # dest folder inside Desktop — must not recurse into its own output
+    inner = PROFILE / "Desktop" / "ShuntBackup_Inner"
+    _, res_i = backup_core.run_backup(
+        profile_root=PROFILE, items=leaves, dest=inner,
+        mode="folder", admin=admin, on_event=events.append)
+    check((inner / "Desktop/shortcut.lnk").is_file(),
+          "dest-inside-source still copies", failures)
+    check(not (inner / "Desktop" / "ShuntBackup_Inner").exists(),
+          "no self-recursion nest in folder backup", failures)
+
+    dest_zip_in = PROFILE / "Desktop" / "ShuntBackup_Inner.zip"
+    backup_core.run_backup(profile_root=PROFILE, items=leaves,
+                           dest=dest_zip_in, mode="zip", admin=admin,
+                           on_event=events.append)
+    import zipfile
+    with zipfile.ZipFile(dest_zip_in) as zf:
+        names = zf.namelist()
+    check(dest_zip_in.is_file(), "zip-inside-source written", failures)
+    check(not any("shunt_staging" in n for n in names),
+          "no staging dirs inside zip", failures)
+    check(any("Desktop/shortcut.lnk" in n for n in names),
+          "desktop file present in zip", failures)
+
+    # dest that IS/CONTAINS the profile must refuse outright
+    try:
+        backup_core.run_backup(profile_root=PROFILE, items=leaves,
+                               dest=MOCK / "Users", mode="folder",
+                               admin=admin, on_event=events.append)
+        check(False, "dest containing profile refused", failures)
+    except ValueError:
+        check(True, "dest containing profile refused", failures)
+
     print("\n== restore: zip -> differently-named profile ==")
     dest_profile = work / "NewUser"
     report2, _ = restore_core.run_restore(

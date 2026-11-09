@@ -25,7 +25,7 @@ CREATE_NO_WINDOW = 0x08000000
 
 GLOBAL_XF = ("ntuser.dat*", "NTUSER.DAT*", "UsrClass.dat*", "*.ost")
 GLOBAL_XD = ("$RECYCLE.BIN", "System Volume Information", "Recovery",
-             "Config.Msi")
+             "Config.Msi", "shunt_staging_*")
 
 _ERR_RE = re.compile(r"ERROR\s+(\d+)\s+\(0x[0-9A-Fa-f]+\)\s+(.+)")
 _SUM_RE = re.compile(r"^\s*(Dirs|Files)\s*:\s*(.+)$")

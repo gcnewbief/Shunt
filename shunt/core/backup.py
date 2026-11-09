@@ -156,6 +156,13 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
         work = staging
     else:
         work = dest
+    w = work.resolve()
+    p = profile_root.resolve()
+    if w == p or w in p.parents:
+        raise ValueError(
+            f"dest {work} is/contains the source profile {profile_root}"
+            " — the copy would merge into its own tree; pick a folder "
+            "outside the profile")
     work.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -164,13 +171,35 @@ def run_backup(*, profile_root: Path, items: list[CatalogItem],
                 break
             src, dst = profile_root / item.rel_path, work / item.rel_path
             _emit(on_event, ("item_start", i, len(items), item.label))
+
+            # dest/staging inside the item's own source: robocopy would
+            # mirror the backup into itself ad infinitum — /XD cuts the
+            # backup dir out of the source tree instead of refusing
+            src_r = src.resolve()
+            if src_r == w:
+                res = ItemResult(
+                    rel_path=item.rel_path, exit_code=16,
+                    errors=["dest is the source folder itself — skipped"])
+                results.append(res)
+                _emit(on_event, ("item_done", item.label, res))
+                continue
+            xd = item.extra_xd
+            if src_r in w.parents:
+                # /XD is matched against the path spelling robocopy was
+                # invoked with — a resolved path misses when the source
+                # contains 8.3 or junction components, so spell it under
+                # the src argument instead
+                xd = (*item.extra_xd, str(src / w.relative_to(src_r)))
+                _emit(on_event, ("log",
+                                 f":: backup dir {w} sits inside "
+                                 f"{item.rel_path} — excluded from copy"))
             resets = 0
             while True:
                 res = run_item(
                     src, dst, item.rel_path, admin=admin,
                     mt=preset["mt"], ipg=preset["ipg"], zb=preset["zb"],
                     stall_after=STALL_AFTER,
-                    extra_xd=item.extra_xd, extra_xf=item.extra_xf,
+                    extra_xd=xd, extra_xf=item.extra_xf,
                     on_line=lambda l: _emit(on_event, ("log", l)),
                     on_file=lambda n: _emit(on_event, ("file", n)),
                     cancel=cancel)
